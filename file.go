@@ -3,22 +3,84 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
 
-func replaceFdWithFile(sys syscaller, fd int, file *os.File) error {
-	_, err := fileControl(file, func(replacement uintptr) (struct{}, error) {
-		// dup2 overwrites fd with the newly opened file.
-		return struct{}{}, sys.dup2(int(replacement), fd)
-	})
+// Name of the init binary inside the boot directory.
+const bootDirInit = "init"
+
+// bootDir is a temporary directory for the guest to boot from. The directory is
+// removed when closed.
+type bootDir struct {
+	Path string
+}
+
+// Close removes the directory.
+func (dir *bootDir) Close() error {
+	return os.RemoveAll(dir.Path)
+}
+
+// makeBootDir creates a directory for the guest to boot from. It contains
+// only the init binary and the mountpoints required during early boot.
+func makeBootDir(init string) (_ *bootDir, err error) {
+	path, err := os.MkdirTemp("", "vimto-boot-*")
 	if err != nil {
-		return fmt.Errorf("dup2: %w", err)
+		return nil, err
 	}
-	return nil
+
+	dir := &bootDir{path}
+	defer func() {
+		// Closes over named return value to clean up when setup fails.
+		if err != nil {
+			dir.Close()
+		}
+	}()
+
+	// dev is required for the devtmpfs automount (and therefore the init's
+	// console), tmp for the pivot to tmpfs.
+	for _, sub := range []string{"dev", "tmp"} {
+		if err := os.Mkdir(filepath.Join(path, sub), 0755); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := linkOrCopy(init, filepath.Join(path, bootDirInit)); err != nil {
+		return nil, err
+	}
+
+	return dir, nil
+}
+
+// linkOrCopy makes src available at dst, copying if hard linking fails, e.g.
+// across file systems.
+func linkOrCopy(src, dst string) error {
+	if err := os.Link(src, dst); err == nil {
+		return nil
+	}
+
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return err
+	}
+
+	return dstFile.Close()
 }
 
 func flock(f *os.File, how int) error {
