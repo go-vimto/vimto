@@ -42,6 +42,11 @@ Available commands:
 	exec        Execute a command inside a VM
 	flush-cache Clear the image cache
 
+Environment:
+	GOARCH      Boot a guest of the given architecture, using emulation if
+	            necessary. Requires -userland since the host's binaries can't
+	            be executed by the guest.
+
 Flags:
 `
 
@@ -116,8 +121,13 @@ func goTestCmd(cfg *config, flags []string, goBinary string, goArgs []string) er
 		return err
 	}
 
+	arch := guestArch()
+	if err := checkUserland(cfg, arch); err != nil {
+		return err
+	}
+
 	// Prime the cache before invoking the go binary.
-	bf, err := findBootFiles(cfg.Kernel, runtime.GOARCH)
+	bf, err := findBootFiles(cfg.Kernel, arch)
 	if err != nil {
 		return err
 	}
@@ -126,7 +136,7 @@ func goTestCmd(cfg *config, flags []string, goBinary string, goArgs []string) er
 	// Fetch the userland first before invoking go, since it renders animated
 	// output.
 	if cfg.Userland != "" {
-		_, img, err := findUserland(cfg.Userland, runtime.GOARCH)
+		_, img, err := findUserland(cfg.Userland, arch)
 		if err != nil {
 			return err
 		}
@@ -186,7 +196,12 @@ func execCmd(cfg *config, args []string) error {
 		return fmt.Errorf("missing arguments")
 	}
 
-	bf, err := findBootFiles(cfg.Kernel, runtime.GOARCH)
+	arch := guestArch()
+	if err := checkUserland(cfg, arch); err != nil {
+		return err
+	}
+
+	bf, err := findBootFiles(cfg.Kernel, arch)
 	if err != nil {
 		return err
 	}
@@ -194,7 +209,7 @@ func execCmd(cfg *config, args []string) error {
 
 	var userland string
 	if cfg.Userland != "" {
-		dir, img, err := findUserland(cfg.Userland, runtime.GOARCH)
+		dir, img, err := findUserland(cfg.Userland, arch)
 		if err != nil {
 			return err
 		}
@@ -288,6 +303,7 @@ func execCmd(cfg *config, args []string) error {
 
 	cmd := &command{
 		Kernel:      bf.Kernel,
+		Arch:        arch,
 		Memory:      cfg.Memory,
 		SMP:         cfg.SMP,
 		Path:        path,
@@ -330,6 +346,27 @@ func execCmd(cfg *config, args []string) error {
 	}
 
 	return waitErr
+}
+
+// guestArch returns the architecture of the guest VM.
+//
+// Honours the GOARCH environment variable so that 'GOARCH=... vimto -- go
+// test' executes foreign test binaries in a matching guest.
+func guestArch() string {
+	if arch := os.Getenv("GOARCH"); arch != "" {
+		return arch
+	}
+	return runtime.GOARCH
+}
+
+// checkUserland ensures that a userland is configured for guests which can't
+// execute the host's binaries.
+func checkUserland(cfg *config, arch string) error {
+	if arch == runtime.GOARCH || cfg.Userland != "" {
+		return nil
+	}
+
+	return fmt.Errorf("the host's binaries can't be executed in a %s guest, specify an image via -userland or %s", arch, configFileName)
 }
 
 func findBootFiles(kernel, arch string) (_ *bootFiles, err error) {
