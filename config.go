@@ -16,6 +16,7 @@ import (
 type config struct {
 	Kernel   string          `toml:"kernel"`
 	Userland string          `toml:"userland"`
+	Volumes  []volume        `toml:"volumes"`
 	Memory   string          `toml:"memory"`
 	SMP      string          `toml:"smp"`
 	User     string          `toml:"user"`
@@ -26,6 +27,7 @@ type config struct {
 }
 
 var defaultConfig = &config{
+	Volumes:  []volume{},
 	Memory:   "size=128M",
 	SMP:      "cpus=1",
 	Setup:    []configCommand{},
@@ -51,6 +53,14 @@ func parseConfigFromTOML(dir string, cfg *config) error {
 		return fmt.Errorf("read %q: %w", f.Name(), err)
 	}
 
+	for i, v := range cfg.Volumes {
+		vol, err := newVolume(v.Host, v.Guest)
+		if err != nil {
+			return fmt.Errorf("read %q: %w", f.Name(), err)
+		}
+		cfg.Volumes[i] = vol
+	}
+
 	if len(md.Undecoded()) == 0 {
 		return nil
 	}
@@ -61,6 +71,45 @@ func parseConfigFromTOML(dir string, cfg *config) error {
 	}
 
 	return fmt.Errorf("%q: %w: %s", f.Name(), errUnrecognisedKeys, strings.Join(keys, ", "))
+}
+
+// newVolume returns a volume for a host directory. An empty guest path makes
+// it available at the same path as on the host.
+func newVolume(host, guest string) (volume, error) {
+	if host == "" {
+		return volume{}, errors.New("volume: missing host path")
+	}
+
+	host, err := filepath.Abs(host)
+	if err != nil {
+		return volume{}, err
+	}
+
+	if guest == "" {
+		guest = host
+	}
+	if !filepath.IsAbs(guest) {
+		return volume{}, fmt.Errorf("volume %s: guest path %q must be absolute", host, guest)
+	}
+
+	// The -volume flag can't represent them.
+	for _, path := range []string{host, guest} {
+		if strings.Contains(path, ":") {
+			return volume{}, fmt.Errorf("volume path %q: colons are not supported", path)
+		}
+	}
+
+	return volume{host, guest}, nil
+}
+
+// parseVolume parses the host:guest argument of the -volume flag.
+func parseVolume(s string) (volume, error) {
+	host, guest, found := strings.Cut(s, ":")
+	if found && guest == "" {
+		return volume{}, errors.New("missing guest path")
+	}
+
+	return newVolume(host, guest)
 }
 
 func configFlags(name string, cfg *config) *flag.FlagSet {
@@ -85,6 +134,15 @@ func configFlags(name string, cfg *config) *flag.FlagSet {
 	})
 	fs.Func("userland", "`path or url` of an OCI image containing the guest's userland, for example 'alpine:latest'", func(s string) error {
 		cfg.Userland = s
+		return nil
+	})
+	fs.Func("volume", "`host:guest` mapping of a directory shared with the VM (repeatable)", func(s string) error {
+		vol, err := parseVolume(s)
+		if err != nil {
+			return err
+		}
+
+		cfg.Volumes = append(cfg.Volumes, vol)
 		return nil
 	})
 	fs.Func("memory", "memory to give to the VM", func(s string) error {

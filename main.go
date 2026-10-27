@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -158,6 +159,22 @@ func goTestCmd(cfg *config, flags []string, goBinary string, goArgs []string) er
 	return cmd.Run()
 }
 
+// Matches test binaries built by go test, e.g. /tmp/go-build123/b001/pkg.test.
+var goTestBinary = regexp.MustCompile(`/go-build[0-9]+/.+\.test$`)
+
+// maskedInGuest resolves symlinks in dir and returns true if the guest replaces
+// the result with an empty directory, even when using the host's root.
+func maskedInGuest(dir string) (string, bool) {
+	// The directory may be reached through a symlink, e.g. /var/run -> /run.
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+
+	return dir, slices.ContainsFunc(opaqueDirectories, func(opaque string) bool {
+		return dir == opaque || strings.HasPrefix(dir, opaque+"/")
+	})
+}
+
 func execCmd(cfg *config, args []string) error {
 	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
 	fs.Usage = func() {
@@ -221,23 +238,60 @@ func execCmd(cfg *config, args []string) error {
 	defer cancel()
 
 	// Ensure that the repository root is available in the VM.
-	var sharedDirectories []string
-	if repo, err := findGitRoot("."); err != nil {
-		return err
-	} else if repo != "" {
-		sharedDirectories = append(sharedDirectories, repo)
+	var sharedDirectories []volume
+	addShare := func(sd volume) {
+		if !slices.Contains(sharedDirectories, sd) {
+			sharedDirectories = append(sharedDirectories, sd)
+		}
 	}
 
-	// Ensure that the binary is available in the VM.
+	repo, err := findGitRoot(".")
+	if err != nil {
+		return err
+	}
+	if repo != "" {
+		addShare(volume{repo, repo})
+	}
+
 	path := fs.Arg(0)
-	sharedDirectories = append(sharedDirectories, filepath.Dir(path))
+	binDir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+
+	// The (host) directory of the exec command provided to vimto is
+	// automatically mapped into the guest in two scenarios:
+	//
+	// 1. The binary is a Go test binary. `go test` builds test binaries in a
+	// tempdir on the host and invokes `vimto exec` with the location of the
+	// test binary.
+	//
+	// 2. The host root is shared with the guest (no userland) and the provided
+	// command is located in a directory that is masked in the guest, like /tmp
+	// or /dev/shm. In this case the least surprising thing to do is to forward
+	// the host directory to the guest none the less.
+	if _, err := os.Stat(path); err == nil {
+		if goTestBinary.MatchString(path) {
+			addShare(volume{binDir, binDir})
+		} else if dir, masked := maskedInGuest(binDir); masked && cfg.Userland == "" {
+			addShare(volume{dir, dir})
+		}
+	}
 
 	// Ensure that the working directory is available.
 	wd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	sharedDirectories = append(sharedDirectories, wd)
+	if wd != "/" {
+		// The guest always has a root of its own.
+		addShare(volume{wd, wd})
+	}
+
+	// Expose host directories specified by the user.
+	for _, v := range cfg.Volumes {
+		addShare(v)
+	}
 
 	tmp := make([]byte, 2)
 	rand.Read(tmp)
@@ -265,7 +319,7 @@ func execCmd(cfg *config, args []string) error {
 		},
 		Setup:             cfg.Setup,
 		Teardown:          cfg.Teardown,
-		SharedDirectories: slices.Compact(sharedDirectories),
+		SharedDirectories: sharedDirectories,
 	}
 
 	if cfg.Console {

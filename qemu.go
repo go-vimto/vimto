@@ -24,6 +24,12 @@ import (
 
 const envDisableKVM = "VIMTO_DISABLE_KVM"
 
+// volume is a host directory made available at a path in the guest.
+type volume struct {
+	Host  string `toml:"host"`
+	Guest string `toml:"guest"`
+}
+
 // command is a binary to be executed under a different kernel.
 //
 // Mirrors exec.Cmd.
@@ -71,7 +77,7 @@ type command struct {
 	Setup, Teardown []configCommand
 
 	SerialPorts       map[string]*os.File
-	SharedDirectories []string
+	SharedDirectories []volume
 
 	cmd   *exec.Cmd
 	tasks errgroup.Group
@@ -190,17 +196,29 @@ func (cmd *command) Start(ctx context.Context) (err error) {
 
 	mountTags := make(map[string]string)
 	for i, dir := range cmd.SharedDirectories {
-		fstype, found := earlyMounts.pathIsBelowMount(dir)
+		if !filepath.IsAbs(dir.Guest) {
+			return fmt.Errorf("shared directory %q: guest path must be absolute", dir.Guest)
+		}
+
+		// The guest cleans the path before mounting, so validate what it will
+		// actually mount over.
+		guestPath := filepath.Clean(dir.Guest)
+		if guestPath == "/" {
+			// Would hide the root assembled by the guest.
+			return fmt.Errorf("shared directory %q: can't mount over the guest's root", dir.Host)
+		}
+
+		fstype, found := earlyMounts.pathIsBelowMount(guestPath)
 		if found && fstype != "tmpfs" {
-			return fmt.Errorf("directory %s is shadowed by %s mount in the guest", dir, fstype)
+			return fmt.Errorf("directory %s is shadowed by %s mount in the guest", guestPath, fstype)
 		}
 
 		id := fmt.Sprintf("sd-9p-%d", i)
-		mountTags[id] = dir
+		mountTags[id] = guestPath
 		devices = append(devices, &p9SharedDirectory{
 			ID:   fsdev(id),
 			Tag:  id,
-			Path: dir,
+			Path: dir.Host,
 		})
 	}
 

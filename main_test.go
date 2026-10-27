@@ -93,6 +93,52 @@ func TestExecutable(t *testing.T) {
 	scripttest.Test(t, context.Background(), e, env, "testdata/*.txt")
 }
 
+func TestParseVolume(t *testing.T) {
+	for _, tc := range []struct {
+		volume string
+		want   volume
+	}{
+		{"/a", volume{"/a", "/a"}},
+		{"/a:/b", volume{"/a", "/b"}},
+	} {
+		have, err := parseVolume(tc.volume)
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(have, tc.want), qt.Commentf(tc.volume))
+	}
+
+	for _, volume := range []string{"", ":/b", "/a:", "/a:b", "/a:/b:c"} {
+		_, err := parseVolume(volume)
+		qt.Assert(t, qt.IsNotNil(err), qt.Commentf(volume))
+	}
+
+	_, err := newVolume("/a:b", "/c")
+	qt.Assert(t, qt.IsNotNil(err), qt.Commentf("colon in host path"))
+
+	// Relative host paths.
+	have, err := parseVolume("a:/b")
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.IsTrue(filepath.IsAbs(have.Host)))
+	qt.Assert(t, qt.Equals(have.Guest, "/b"))
+}
+
+func TestGoTestBinary(t *testing.T) {
+	for _, path := range []string{
+		"/tmp/go-build123/b001/vimto.test",
+		"/dev/shm/go-build2821693561/b001/vimto.test",
+	} {
+		qt.Assert(t, qt.IsTrue(goTestBinary.MatchString(path)), qt.Commentf(path))
+	}
+
+	for _, path := range []string{
+		"/bin/sh",
+		"./vimto.test",
+		"/tmp/go-build/b001/vimto.test",
+		"/tmp/go-build123/b001/vimto",
+	} {
+		qt.Assert(t, qt.IsFalse(goTestBinary.MatchString(path)), qt.Commentf(path))
+	}
+}
+
 func kernelImage() string {
 	image := os.Getenv("CI_KERNEL")
 	if image == "" {
