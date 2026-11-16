@@ -4,7 +4,8 @@ config kernel="${KERNEL}"
 vimto exec -- sh -c 'ulimit -c'
 stdout unlimited
 
-# Trigger a core dump inside the VM.
+# Trigger a core dump inside the VM. GNU coreutils' timeout will display the
+# message: 'timeout: the monitored command dumped core', uutils' (Ubuntu 26.04
+# and later) won't do that.
 ! vimto exec -- timeout -s QUIT 0.1s sleep 10
-stdout 'dumped core'
 glob-exists core-*
