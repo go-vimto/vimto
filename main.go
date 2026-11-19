@@ -143,10 +143,18 @@ func goTestCmd(cfg *config, flags []string, goBinary string, goArgs []string) er
 		defer img.Close()
 	}
 
+	// go test executes the -exec binary with the package directory as its
+	// working directory, so relative paths would resolve against the wrong
+	// place. Replace the user's path flags with absolute ones. All other flags
+	// are passed through as is, and .vimto.toml is read again by the runner.
+	pathFlags, err := absolutePathFlags(cfg)
+	if err != nil {
+		return err
+	}
+
 	execArgs := []string{exe}
-	// Retain command line arguments
-	// TODO: Make -kernel parameter absolute?
-	execArgs = append(execArgs, flags...)
+	execArgs = append(execArgs, withoutPathFlags(flags)...)
+	execArgs = append(execArgs, pathFlags...)
 	// Execute exec command and ignore all test flags.
 	execArgs = append(execArgs, "exec", "--")
 
@@ -509,6 +517,10 @@ func findExecutable() (string, error) {
 	return path, nil
 }
 
+// Flags which take a path and therefore depend on the working directory.
+var pathFlagNames = []string{"kernel", "userland", "volume"}
+
+// splitFlagsFromArgs returns the arguments preceding "--".
 func splitFlagsFromArgs(args []string) ([]string, error) {
 	var flags []string
 	for _, arg := range args {
@@ -520,6 +532,61 @@ func splitFlagsFromArgs(args []string) ([]string, error) {
 	}
 
 	return nil, fmt.Errorf("missing '--' in arguments")
+}
+
+// withoutPathFlags removes the flags listed in pathFlagNames, including their
+// values, from a list of command line arguments.
+func withoutPathFlags(flags []string) []string {
+	var out []string
+	for i := 0; i < len(flags); i++ {
+		name := strings.TrimLeft(flags[i], "-")
+		name, _, inline := strings.Cut(name, "=")
+
+		if slices.Contains(pathFlagNames, name) {
+			if !inline {
+				i++ // the value is the next argument
+			}
+			continue
+		}
+
+		out = append(out, flags[i])
+	}
+	return out
+}
+
+// absolutePathFlags returns path flags reproducing the local paths in cfg as
+// absolute paths. Image references are passed through unchanged.
+func absolutePathFlags(cfg *config) ([]string, error) {
+	abs := func(path string) (string, error) {
+		if _, err := os.Stat(path); err != nil {
+			// Not a local path, probably an image reference.
+			return path, nil
+		}
+		return filepath.Abs(path)
+	}
+
+	var flags []string
+	if cfg.Kernel != "" {
+		kernel, err := abs(cfg.Kernel)
+		if err != nil {
+			return nil, err
+		}
+		flags = append(flags, "-kernel", kernel)
+	}
+
+	if cfg.Userland != "" {
+		userland, err := abs(cfg.Userland)
+		if err != nil {
+			return nil, err
+		}
+		flags = append(flags, "-userland", userland)
+	}
+
+	for _, vol := range cfg.Volumes {
+		flags = append(flags, "-volume", vol.Host+":"+vol.Guest)
+	}
+
+	return flags, nil
 }
 
 func preserveTestBinary(path, wd, corePrefix string) error {

@@ -81,6 +81,20 @@ func TestExecutable(t *testing.T) {
 	scripttest.Test(t, context.Background(), e, env, "testdata/*.txt")
 }
 
+func TestWithoutPathFlags(t *testing.T) {
+	flags := []string{
+		"-kernel", "./k",
+		"-memory", "1G",
+		"--userland=alpine",
+		"-volume", "a:/b",
+		"-volume=c:/d",
+		"-sudo",
+	}
+
+	have := withoutPathFlags(flags)
+	qt.Assert(t, qt.DeepEquals(have, []string{"-memory", "1G", "-sudo"}))
+}
+
 func TestParseVolume(t *testing.T) {
 	for _, tc := range []struct {
 		volume string
