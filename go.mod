@@ -1,4 +1,4 @@
-module lmb.io/vimto
+module github.com/go-vimto/vimto
 
 go 1.23.0
 
