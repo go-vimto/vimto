@@ -101,7 +101,7 @@ func newVolume(host, guest string) (volume, error) {
 		}
 	}
 
-	return volume{host, guest}, nil
+	return volume{host, filepath.Clean(guest)}, nil
 }
 
 // parseVolume parses the host:guest argument of the -volume flag.

@@ -413,6 +413,11 @@ func resolveBootFiles(kernel, arch string) (_ *bootFiles, err error) {
 
 	info, err := os.Stat(kernel)
 	if err == nil {
+		kernel, err = filepath.Abs(kernel)
+		if err != nil {
+			return nil, err
+		}
+
 		if info.IsDir() {
 			return newBootFiles(kernel, arch)
 		}
@@ -470,7 +475,8 @@ func findUserland(userland, arch string) (string, *image, error) {
 		return "", nil, fmt.Errorf("userland %q is not a directory", userland)
 	}
 
-	return userland, nil, nil
+	userland, err = filepath.Abs(userland)
+	return userland, nil, err
 }
 
 // stripLibSymlink removes a top-level lib symlink from an extracted kernel

@@ -102,6 +102,7 @@ func TestParseVolume(t *testing.T) {
 	}{
 		{"/a", volume{"/a", "/a"}},
 		{"/a:/b", volume{"/a", "/b"}},
+		{"/a/:/b/../c/", volume{"/a", "/c"}},
 	} {
 		have, err := parseVolume(tc.volume)
 		qt.Assert(t, qt.IsNil(err))

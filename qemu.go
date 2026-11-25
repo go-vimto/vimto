@@ -25,7 +25,8 @@ import (
 
 const envDisableKVM = "VIMTO_DISABLE_KVM"
 
-// volume is a host directory made available at a path in the guest.
+// volume is a host directory made available at a path in the guest. Both paths
+// must be absolute.
 type volume struct {
 	Host  string `toml:"host"`
 	Guest string `toml:"guest"`
@@ -64,11 +65,12 @@ type command struct {
 	Stdout io.Writer
 	Stderr io.Writer
 
-	// A directory containing the kernel image's contents, made available at
-	// the guest.P9KernelTag share.
+	// Absolute path to a directory containing the kernel image's contents, made
+	// available at the guest.P9KernelTag share.
 	KernelImage string
 
-	// The guest's base file system. Defaults to the host's root.
+	// Absolute path to the guest's base file system. Defaults to the host's
+	// root.
 	Base string
 
 	// Sysctls set before the program is executed.
@@ -96,6 +98,44 @@ type command struct {
 	fakeStdin *os.File
 }
 
+// validatePaths ensures that the paths in cmd are absolute and clean.
+func (cmd *command) validatePaths() error {
+	check := func(name, path string) error {
+		if !filepath.IsAbs(path) || path != filepath.Clean(path) {
+			return fmt.Errorf("%s %q: path must be absolute and clean", name, path)
+		}
+		return nil
+	}
+
+	if err := check("kernel", cmd.Kernel); err != nil {
+		return err
+	}
+
+	for _, optional := range []struct{ name, path string }{
+		{"kernel image", cmd.KernelImage},
+		{"base", cmd.Base},
+		{"working directory", cmd.Dir},
+	} {
+		if optional.path == "" {
+			continue
+		}
+		if err := check(optional.name, optional.path); err != nil {
+			return err
+		}
+	}
+
+	for _, dir := range cmd.SharedDirectories {
+		if err := check("shared directory", dir.Host); err != nil {
+			return err
+		}
+		if err := check("guest path of shared directory", dir.Guest); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (cmd *command) Start(ctx context.Context) (err error) {
 	closeOnError := func(c io.Closer) {
 		if err != nil {
@@ -108,6 +148,10 @@ func (cmd *command) Start(ctx context.Context) (err error) {
 
 	if cmd.cmd != nil {
 		return errors.New("qemu: already started")
+	}
+
+	if err := cmd.validatePaths(); err != nil {
+		return err
 	}
 
 	arch := cmd.Arch
@@ -227,25 +271,18 @@ func (cmd *command) Start(ctx context.Context) (err error) {
 
 	mountTags := make(map[string]string)
 	for i, dir := range cmd.SharedDirectories {
-		if !filepath.IsAbs(dir.Guest) {
-			return fmt.Errorf("shared directory %q: guest path must be absolute", dir.Guest)
-		}
-
-		// The guest cleans the path before mounting, so validate what it will
-		// actually mount over.
-		guestPath := filepath.Clean(dir.Guest)
-		if guestPath == "/" {
+		if dir.Guest == "/" {
 			// Would hide the root assembled by the guest.
 			return fmt.Errorf("shared directory %q: can't mount over the guest's root", dir.Host)
 		}
 
-		fstype, found := guest.EarlyMounts.PathIsBelowMount(guestPath)
+		fstype, found := guest.EarlyMounts.PathIsBelowMount(dir.Guest)
 		if found && fstype != "tmpfs" {
-			return fmt.Errorf("directory %s is shadowed by %s mount in the guest", guestPath, fstype)
+			return fmt.Errorf("directory %s is shadowed by %s mount in the guest", dir.Guest, fstype)
 		}
 
 		id := fmt.Sprintf("sd-9p-%d", i)
-		mountTags[id] = guestPath
+		mountTags[id] = dir.Guest
 		devices = append(devices, &p9SharedDirectory{
 			ID:   fsdev(id),
 			Tag:  id,
@@ -254,15 +291,10 @@ func (cmd *command) Start(ctx context.Context) (err error) {
 	}
 
 	if cmd.KernelImage != "" {
-		kernelImage, err := filepath.Abs(cmd.KernelImage)
-		if err != nil {
-			return err
-		}
-
 		devices = append(devices, &p9SharedDirectory{
 			fsdev(guest.P9KernelTag),
 			guest.P9KernelTag,
-			kernelImage,
+			cmd.KernelImage,
 			true,
 		})
 	}
@@ -270,10 +302,6 @@ func (cmd *command) Start(ctx context.Context) (err error) {
 	base := cmd.Base
 	if base == "" {
 		base = "/"
-	}
-	base, err = filepath.Abs(base)
-	if err != nil {
-		return err
 	}
 
 	devices = append(devices, &p9SharedDirectory{
