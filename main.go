@@ -256,7 +256,6 @@ func execCmd(cfg *config, args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	// Ensure that the repository root is available in the VM.
 	var sharedDirectories []volume
 	addShare := func(sd volume) {
 		if !slices.Contains(sharedDirectories, sd) {
@@ -264,6 +263,13 @@ func execCmd(cfg *config, args []string) error {
 		}
 	}
 
+	// Shares are mounted in order. The user's go first so that they can't
+	// hide the automatic ones.
+	for _, v := range cfg.Volumes {
+		addShare(v)
+	}
+
+	// Ensure that the repository root is available in the VM.
 	repo, err := findGitRoot(".")
 	if err != nil {
 		return err
@@ -305,11 +311,6 @@ func execCmd(cfg *config, args []string) error {
 	if wd != "/" {
 		// The guest always has a root of its own.
 		addShare(volume{wd, wd})
-	}
-
-	// Expose host directories specified by the user.
-	for _, v := range cfg.Volumes {
-		addShare(v)
 	}
 
 	tmp := make([]byte, 2)

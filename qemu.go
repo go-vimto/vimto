@@ -269,7 +269,8 @@ func (cmd *command) Start(ctx context.Context) (err error) {
 		virtioPorts.Chardevs[cds.addFdSet(fds.addFile(port))] = name
 	}
 
-	mountTags := make(map[string]string)
+	var mounts []guest.Mount
+	hosts := make(map[string]string) // guest path to host path
 	for i, dir := range cmd.SharedDirectories {
 		if dir.Guest == "/" {
 			// Would hide the root assembled by the guest.
@@ -281,8 +282,13 @@ func (cmd *command) Start(ctx context.Context) (err error) {
 			return fmt.Errorf("directory %s is shadowed by %s mount in the guest", dir.Guest, fstype)
 		}
 
+		if host, ok := hosts[dir.Guest]; ok {
+			return fmt.Errorf("shared directories %q and %q: both mounted at %s in the guest", host, dir.Host, dir.Guest)
+		}
+		hosts[dir.Guest] = dir.Host
+
 		id := fmt.Sprintf("sd-9p-%d", i)
-		mountTags[id] = dir.Guest
+		mounts = append(mounts, guest.Mount{Tag: id, Path: dir.Guest})
 		devices = append(devices, &p9SharedDirectory{
 			ID:   fsdev(id),
 			Tag:  id,
@@ -365,17 +371,17 @@ func (cmd *command) Start(ctx context.Context) (err error) {
 	}
 
 	execCmd := guest.ExecCommand{
-		Path:      cmd.Path,
-		Args:      cmd.Args,
-		Dir:       cmd.Dir,
-		Uid:       uid,
-		Gid:       gid,
-		Env:       env,
-		Sysctls:   cmd.Sysctls,
-		Rlimits:   cmd.Rlimits,
-		Setup:     cmd.Setup,
-		Teardown:  cmd.Teardown,
-		MountTags: mountTags,
+		Path:     cmd.Path,
+		Args:     cmd.Args,
+		Dir:      cmd.Dir,
+		Uid:      uid,
+		Gid:      gid,
+		Env:      env,
+		Sysctls:  cmd.Sysctls,
+		Rlimits:  cmd.Rlimits,
+		Setup:    cmd.Setup,
+		Teardown: cmd.Teardown,
+		Mounts:   mounts,
 	}
 
 	// init has to go last since we stop processing of KArgs after.

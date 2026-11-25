@@ -26,7 +26,12 @@ type ExecCommand struct {
 	Sysctls         []Sysctl
 	Rlimits         map[int]unix.Rlimit
 	Setup, Teardown []Command
-	MountTags       map[string]string // map[tag]path
+	Mounts          []Mount // in mount order
+}
+
+// Mount is a 9p share and the path it is mounted at in the guest.
+type Mount struct {
+	Tag, Path string
 }
 
 type Sysctl struct {

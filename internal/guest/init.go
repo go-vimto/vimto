@@ -237,26 +237,25 @@ func Init(sys Syscaller, args []string) error {
 			return fmt.Errorf("read command: %w", err)
 		}
 
-		for tag, path := range cmd.MountTags {
-			path = filepath.Clean(path)
-			fmt.Println("Mounting", path)
+		for _, m := range cmd.Mounts {
+			fmt.Println("Mounting", m.Path)
 
 			// The mountpoint may not exist, e.g. below an opaque directory or
 			// when a userland replaced the root filesystem.
-			if err := os.MkdirAll(path, 0755); err != nil {
-				return fmt.Errorf("mount %q: %w", path, err)
+			if err := os.MkdirAll(m.Path, 0755); err != nil {
+				return fmt.Errorf("mount %q: %w", m.Path, err)
 			}
 
 			// TODO: Investigate dfltuid, dfltgid, noxattr options.
 			err = sys.mount(&mountPoint{
-				tag, path,
+				m.Tag, m.Path,
 				"9p",
 				Default9POptions,
 				unix.MS_NOSUID,
 				false, // ignored
 			})
 			if err != nil {
-				return fmt.Errorf("mount %q: %w", path, err)
+				return fmt.Errorf("mount %q: %w", m.Path, err)
 			}
 		}
 

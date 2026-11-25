@@ -77,6 +77,20 @@ volumes = [{ host = "/host/path", guest = "/guest/path" }]
 If the guest path is omitted, the host path is mapped into the guest verbatim.
 Paths containing a colon are not supported.
 
+Directories are mounted in the guest in a fixed order. A later mount hides
+whatever an earlier one put at the same location:
+
+1. The guest's root: the host's root or the `-userland`, with the kernel image
+   merged over it.
+2. Volumes from `.vimto.toml`, followed by `-volume` flags, in the order given.
+3. The Git repository and the working directory.
+
+A volume nested in another one has to come after its parent, and two volumes
+can't use the same guest path. A volume inside the repository or the working
+directory is hidden by them. `vimto` doesn't resolve symlinks in guest paths.
+They are followed by the guest when the directory is mounted, so the result
+depends on the layout of the guest's root and of the volumes mounted before.
+
 ## Cross-architecture tests
 
 `vimto` honours the `GOARCH` environment variable and boots a guest of a matching
