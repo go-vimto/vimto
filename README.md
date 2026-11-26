@@ -42,6 +42,9 @@ CGO_ENABLED=0 go install github.com/go-vimto/vimto@latest
 
 All available options and their values are in [testdata/default.toml](./testdata/default.toml).
 
+Relative paths in the configuration file are resolved against the directory
+containing it.
+
 ## Userland
 
 By default, the guest uses the host's root filesystem. Use `-userland` to use an

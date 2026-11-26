@@ -55,12 +55,8 @@ func parseConfigFromTOML(dir string, cfg *config) error {
 		return fmt.Errorf("read %q: %w", f.Name(), err)
 	}
 
-	for i, v := range cfg.Volumes {
-		vol, err := newVolume(v.Host, v.Guest)
-		if err != nil {
-			return fmt.Errorf("read %q: %w", f.Name(), err)
-		}
-		cfg.Volumes[i] = vol
+	if err := cfg.resolvePaths(filepath.Dir(f.Name())); err != nil {
+		return fmt.Errorf("read %q: %w", f.Name(), err)
 	}
 
 	if len(md.Undecoded()) == 0 {
@@ -75,13 +71,45 @@ func parseConfigFromTOML(dir string, cfg *config) error {
 	return fmt.Errorf("%q: %w: %s", f.Name(), errUnrecognisedKeys, strings.Join(keys, ", "))
 }
 
-// newVolume returns a volume for a host directory. An empty guest path makes
-// it available at the same path as on the host.
-func newVolume(host, guest string) (volume, error) {
+// resolvePaths makes relative paths in cfg absolute, with dir as their base.
+func (cfg *config) resolvePaths(dir string) error {
+	for _, path := range []*string{&cfg.Kernel, &cfg.Userland} {
+		if *path == "" || filepath.IsAbs(*path) {
+			continue
+		}
+
+		abs, err := filepath.Abs(filepath.Join(dir, *path))
+		if err != nil {
+			return err
+		}
+
+		// Leave it alone if it doesn't exist, it's probably an image reference.
+		if _, err := os.Stat(abs); err == nil {
+			*path = abs
+		}
+	}
+
+	for i, v := range cfg.Volumes {
+		vol, err := newVolume(dir, v.Host, v.Guest)
+		if err != nil {
+			return err
+		}
+		cfg.Volumes[i] = vol
+	}
+
+	return nil
+}
+
+// newVolume returns a volume for a host directory, which may be relative to
+// dir. An empty guest path makes it available at the same path as on the host.
+func newVolume(dir, host, guest string) (volume, error) {
 	if host == "" {
 		return volume{}, errors.New("volume: missing host path")
 	}
 
+	if !filepath.IsAbs(host) {
+		host = filepath.Join(dir, host)
+	}
 	host, err := filepath.Abs(host)
 	if err != nil {
 		return volume{}, err
@@ -111,7 +139,7 @@ func parseVolume(s string) (volume, error) {
 		return volume{}, errors.New("missing guest path")
 	}
 
-	return newVolume(host, guest)
+	return newVolume(".", host, guest)
 }
 
 func configFlags(name string, cfg *config) *flag.FlagSet {

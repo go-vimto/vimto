@@ -114,7 +114,7 @@ func TestParseVolume(t *testing.T) {
 		qt.Assert(t, qt.IsNotNil(err), qt.Commentf(volume))
 	}
 
-	_, err := newVolume("/a:b", "/c")
+	_, err := newVolume(".", "/a:b", "/c")
 	qt.Assert(t, qt.IsNotNil(err), qt.Commentf("colon in host path"))
 
 	// Relative host paths.

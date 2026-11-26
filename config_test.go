@@ -35,6 +35,26 @@ memory = "bar"
 	}))
 }
 
+func TestConfigRelativePaths(t *testing.T) {
+	tmp := t.TempDir()
+	qt.Assert(t, qt.IsNil(os.Mkdir(filepath.Join(tmp, "kernel"), 0755)))
+
+	mustWriteConfig(t, tmp, `
+kernel = "kernel"
+userland = "example.org/image:tag"
+volumes = [{ host = "data", guest = "/data" }, { host = "/abs" }]
+`)
+
+	var cfg config
+	qt.Assert(t, qt.IsNil(parseConfigFromTOML(tmp, &cfg)))
+	qt.Assert(t, qt.Equals(cfg.Kernel, filepath.Join(tmp, "kernel")))
+	qt.Assert(t, qt.Equals(cfg.Userland, "example.org/image:tag"))
+	qt.Assert(t, qt.DeepEquals(cfg.Volumes, []volume{
+		{filepath.Join(tmp, "data"), "/data"},
+		{"/abs", "/abs"},
+	}))
+}
+
 func TestRefuseExtraneousConfig(t *testing.T) {
 	tmp := t.TempDir()
 

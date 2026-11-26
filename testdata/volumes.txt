@@ -34,6 +34,15 @@ symlink link -> ${TMPDIR}
 vimto exec link/prog
 stdout ^masked$
 
+# Relative paths in the configuration are resolved against the directory
+# containing the config, not the cwd.
+exec git init -q
+config kernel="${KERNEL}" 'volumes=[{host="outer",guest="/data"}]'
+mkdir sub
+cd sub
+vimto exec -- cat /data/file
+stdout ^outer$
+
 # The working directory is not shared when it is the root.
 cd /
 vimto -kernel ${KERNEL} exec -- true
