@@ -11,40 +11,29 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/kballard/go-shellquote"
+
+	"github.com/go-vimto/vimto/internal/guest"
 )
 
 type config struct {
 	Kernel   string          `toml:"kernel"`
+	Userland string          `toml:"userland"`
+	Volumes  []volume        `toml:"volumes"`
 	Memory   string          `toml:"memory"`
 	SMP      string          `toml:"smp"`
 	User     string          `toml:"user"`
 	GDB      string          `toml:"-"`
-	Setup    []configCommand `toml:"setup"`
-	Teardown []configCommand `toml:"teardown"`
-}
-
-type configCommand []string
-
-func (cc *configCommand) UnmarshalText(text []byte) error {
-	words, err := shellquote.Split(string(text))
-	if err != nil {
-		return err
-	}
-
-	*cc = configCommand(words)
-	return nil
-}
-
-func (cc *configCommand) MarshalText() ([]byte, error) {
-	return []byte(shellquote.Join(*cc...)), nil
+	Console  bool            `toml:"-"`
+	Setup    []guest.Command `toml:"setup"`
+	Teardown []guest.Command `toml:"teardown"`
 }
 
 var defaultConfig = &config{
+	Volumes:  []volume{},
 	Memory:   "size=128M",
 	SMP:      "cpus=1",
-	Setup:    []configCommand{},
-	Teardown: []configCommand{},
+	Setup:    []guest.Command{},
+	Teardown: []guest.Command{},
 }
 
 const configFileName = ".vimto.toml"
@@ -66,6 +55,10 @@ func parseConfigFromTOML(dir string, cfg *config) error {
 		return fmt.Errorf("read %q: %w", f.Name(), err)
 	}
 
+	if err := cfg.resolvePaths(filepath.Dir(f.Name())); err != nil {
+		return fmt.Errorf("read %q: %w", f.Name(), err)
+	}
+
 	if len(md.Undecoded()) == 0 {
 		return nil
 	}
@@ -76,6 +69,77 @@ func parseConfigFromTOML(dir string, cfg *config) error {
 	}
 
 	return fmt.Errorf("%q: %w: %s", f.Name(), errUnrecognisedKeys, strings.Join(keys, ", "))
+}
+
+// resolvePaths makes relative paths in cfg absolute, with dir as their base.
+func (cfg *config) resolvePaths(dir string) error {
+	for _, path := range []*string{&cfg.Kernel, &cfg.Userland} {
+		if *path == "" || filepath.IsAbs(*path) {
+			continue
+		}
+
+		abs, err := filepath.Abs(filepath.Join(dir, *path))
+		if err != nil {
+			return err
+		}
+
+		// Leave it alone if it doesn't exist, it's probably an image reference.
+		if _, err := os.Stat(abs); err == nil {
+			*path = abs
+		}
+	}
+
+	for i, v := range cfg.Volumes {
+		vol, err := newVolume(dir, v.Host, v.Guest)
+		if err != nil {
+			return err
+		}
+		cfg.Volumes[i] = vol
+	}
+
+	return nil
+}
+
+// newVolume returns a volume for a host directory, which may be relative to
+// dir. An empty guest path makes it available at the same path as on the host.
+func newVolume(dir, host, guest string) (volume, error) {
+	if host == "" {
+		return volume{}, errors.New("volume: missing host path")
+	}
+
+	if !filepath.IsAbs(host) {
+		host = filepath.Join(dir, host)
+	}
+	host, err := filepath.Abs(host)
+	if err != nil {
+		return volume{}, err
+	}
+
+	if guest == "" {
+		guest = host
+	}
+	if !filepath.IsAbs(guest) {
+		return volume{}, fmt.Errorf("volume %s: guest path %q must be absolute", host, guest)
+	}
+
+	// The -volume flag can't represent them.
+	for _, path := range []string{host, guest} {
+		if strings.Contains(path, ":") {
+			return volume{}, fmt.Errorf("volume path %q: colons are not supported", path)
+		}
+	}
+
+	return volume{host, filepath.Clean(guest)}, nil
+}
+
+// parseVolume parses the host:guest argument of the -volume flag.
+func parseVolume(s string) (volume, error) {
+	host, guest, found := strings.Cut(s, ":")
+	if found && guest == "" {
+		return volume{}, errors.New("missing guest path")
+	}
+
+	return newVolume(".", host, guest)
 }
 
 func configFlags(name string, cfg *config) *flag.FlagSet {
@@ -98,15 +162,28 @@ func configFlags(name string, cfg *config) *flag.FlagSet {
 		cfg.Kernel = fmt.Sprintf("%s:%s", image, tag)
 		return nil
 	})
+	fs.Func("userland", "`path or url` of an OCI image containing the guest's userland, for example 'alpine:latest'", func(s string) error {
+		cfg.Userland = s
+		return nil
+	})
+	fs.Func("volume", "`host:guest` mapping of a directory shared with the VM (repeatable)", func(s string) error {
+		vol, err := parseVolume(s)
+		if err != nil {
+			return err
+		}
+
+		cfg.Volumes = append(cfg.Volumes, vol)
+		return nil
+	})
 	fs.Func("memory", "memory to give to the VM", func(s string) error {
 		cfg.Memory = s
 		return nil
 	})
-	fs.Func("smp", "", func(s string) error {
+	fs.Func("smp", "the -smp parameter passed to QEMU to define a CPU topology hierarchy, for example 'cpus=2'", func(s string) error {
 		cfg.SMP = s
 		return nil
 	})
-	fs.BoolFunc("sudo", "execute as root", func(s string) error {
+	fs.BoolFunc("sudo", "run the process as root inside the VM, otherwise run as the current user (default: false)", func(s string) error {
 		if s != "true" {
 			return errors.New("flag only accepts true")
 		}
@@ -120,6 +197,14 @@ func configFlags(name string, cfg *config) *flag.FlagSet {
 		}
 
 		cfg.GDB = "localhost:1234"
+		return nil
+	})
+	fs.BoolFunc("console", "stream the guest's console to stderr", func(s string) error {
+		if s != "true" {
+			return errors.New("flag only accepts true")
+		}
+
+		cfg.Console = true
 		return nil
 	})
 

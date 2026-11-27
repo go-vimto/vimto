@@ -3,12 +3,25 @@ package main
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/creack/pty/v2"
 	"github.com/go-quicktest/qt"
 	"golang.org/x/sys/unix"
 )
+
+func TestMakeBootDir(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	_, err := makeBootDir(filepath.Join(tmp, "missing"))
+	qt.Assert(t, qt.IsNotNil(err))
+
+	entries, err := os.ReadDir(tmp)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.HasLen(entries, 0), qt.Commentf("boot directory left behind"))
+}
 
 func TestFileControl(t *testing.T) {
 	f, err := os.CreateTemp("", "")

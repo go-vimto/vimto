@@ -1,0 +1,56 @@
+config kernel="${KERNEL}"
+
+# A volume is mounted at the given guest path.
+vimto -volume outer:/data exec -- cat /data/file
+stdout ^outer$
+
+# Volumes are mounted in the order given, so a nested volume goes after its
+# parent.
+vimto -volume outer:/data -volume inner:/data/inner exec -- cat /data/file /data/inner/file
+stdout ^outer$
+stdout ^inner$
+
+# The working directory is mounted last, so a volume can't hide it.
+vimto -volume outer:${WORK}/.. exec -- cat outer/file
+stdout ^outer$
+
+# Sharing the same directory twice is fine.
+vimto -volume outer:/data -volume outer/:/data/ exec -- cat /data/file
+stdout ^outer$
+
+# Two directories can't be mounted at the same guest path.
+! vimto -volume outer:/data -volume inner:/data exec -- true
+stderr 'both mounted at /data'
+
+# The directory of a binary which is masked in the guest is shared automatically.
+new-tmp
+cp prog ${TMPDIR}/prog
+chmod 0755 ${TMPDIR}/prog
+vimto exec ${TMPDIR}/prog
+stdout ^masked$
+
+# Also when the binary is reached through a symlink.
+symlink link -> ${TMPDIR}
+vimto exec link/prog
+stdout ^masked$
+
+# Relative paths in the configuration are resolved against the directory
+# containing the config, not the cwd.
+exec git init -q
+config kernel="${KERNEL}" 'volumes=[{host="outer",guest="/data"}]'
+mkdir sub
+cd sub
+vimto exec -- cat /data/file
+stdout ^outer$
+
+# The working directory is not shared when it is the root.
+cd /
+vimto -kernel ${KERNEL} exec -- true
+
+-- prog --
+#!/bin/sh
+echo masked
+-- outer/file --
+outer
+-- inner/file --
+inner

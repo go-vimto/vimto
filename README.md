@@ -33,7 +33,7 @@ See also [Container format](docs/container.md).
 Install using the Go toolchain:
 
 ```shell
-CGO_ENABLED=0 go install lmb.io/vimto@latest
+CGO_ENABLED=0 go install github.com/go-vimto/vimto@latest
 ```
 
 ## Configuration
@@ -42,11 +42,75 @@ CGO_ENABLED=0 go install lmb.io/vimto@latest
 
 All available options and their values are in [testdata/default.toml](./testdata/default.toml).
 
+Relative paths in the configuration file are resolved against the directory
+containing it.
+
+## Userland
+
+By default, the guest uses the host's root filesystem. Use `-userland` to use an
+OCI image or a local directory as the guest's root instead:
+
+```shell
+vimto -userland alpine -- go test .
+```
+
+## Directory Sharing
+
+`vimto` maps the current Git repository as well as the working directory of the
+calling process into the guest automatically:
+
+```
+sd-9p-0 on /home/timo/vimto type 9p (<opts>)
+sd-9p-1 on /home/timo/vimto/docs type 9p (<opts>)
+```
+
+Additional host directories can be shared with the guest using Docker-style
+mappings:
+
+```shell
+vimto -volume /host/path:/guest/path -- go test .
+```
+
+Or in `.vimto.toml`:
+
+```toml
+volumes = [{ host = "/host/path", guest = "/guest/path" }]
+```
+
+If the guest path is omitted, the host path is mapped into the guest verbatim.
+Paths containing a colon are not supported.
+
+Directories are mounted in the guest in a fixed order. A later mount hides
+whatever an earlier one put at the same location:
+
+1. The guest's root: the host's root or the `-userland`, with the kernel image
+   merged over it.
+2. Volumes from `.vimto.toml`, followed by `-volume` flags, in the order given.
+3. The Git repository and the working directory.
+
+A volume nested in another one has to come after its parent, and two volumes
+can't use the same guest path. A volume inside the repository or the working
+directory is hidden by them. `vimto` doesn't resolve symlinks in guest paths.
+They are followed by the guest when the directory is mounted, so the result
+depends on the layout of the guest's root and of the volumes mounted before.
+
+## Cross-architecture tests
+
+`vimto` honours the `GOARCH` environment variable and boots a guest of a matching
+architecture, using emulation if necessary:
+
+```shell
+GOARCH=arm64 vimto -userland alpine -- go test .
+```
+
+This requires the appropriate `qemu-system-*` binary on the host and uses TCG
+instead of KVM, which is significantly slower. The host's binaries can't be
+executed by a foreign-architecture guest, so `-userland` is required.
+
 ## Currently not supported
 
 * Networking
 * Interactive shell sessions
-* Cross-arch tests (running `arm64` on `amd64` host for example)
 
 ## Requirements
 

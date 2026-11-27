@@ -12,6 +12,23 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestCommandValidatePaths(t *testing.T) {
+	valid := &command{
+		Kernel:            "/boot/vmlinuz",
+		SharedDirectories: []volume{{"/host", "/guest"}},
+	}
+	qt.Assert(t, qt.IsNil(valid.validatePaths()))
+
+	for _, cmd := range []*command{
+		{Kernel: "vmlinuz"},
+		{Kernel: "/boot/vmlinuz", Base: "rootfs"},
+		{Kernel: "/boot/vmlinuz", SharedDirectories: []volume{{"host", "/guest"}}},
+		{Kernel: "/boot/vmlinuz", SharedDirectories: []volume{{"/host", "/data/../proc"}}},
+	} {
+		qt.Assert(t, qt.IsNotNil(cmd.validatePaths()))
+	}
+}
+
 func TestQemuTTY(t *testing.T) {
 	t.Parallel()
 
